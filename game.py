@@ -37,13 +37,89 @@ White = (255, 255, 255)
 ScoreColor = (0, 0, 255)
 
 
-@njit
+@njit(fastmath=True, cache=True)
 def rotate(arr, n):
     return np.rot90(arr, n)
 
 
+@njit(fastmath=True, cache=True)
+def is_valid_position(piece, pos, grid):
+    h, w = piece.shape
+    x, y = pos
+    H, W = grid.shape
+
+    # check out of bound
+    if x < 0 or x + w > W or y + h > H + BufferHeight:
+        return False
+
+    for y_ in range(h):
+        for x_ in range(w):
+            if y + y_ - BufferHeight < 0:
+                continue
+
+            if piece[y_, x_] == 0:
+                continue
+
+            if grid[y + y_ - BufferHeight, x + x_] != 0:
+                return False
+    return True
+
+
+@njit(fastmath=True, cache=True)
+def lock_piece(grid, piece, pos):
+    h, w = piece.shape
+    x, y = pos
+
+    for y_ in range(h):
+        for x_ in range(w):
+            if y + y_ - BufferHeight < 0:
+                continue
+
+            if piece[y_, x_] == 0:
+                continue
+
+            grid[y + y_ - BufferHeight, x + x_] = piece[y_, x_]
+
+
+@njit(fastmath=True, cache=True)
+def list_lines_to_clear(grid, H, W):
+    rows_to_clear = []
+
+    for y in range(H):
+        row_idx = H - 1 - y
+        if sum(grid[row_idx]) == W:
+            rows_to_clear.append(row_idx)
+    return rows_to_clear
+
+
+@njit(fastmath=True, cache=True)
+def clear_lines(grid, rows_to_clear):
+    H, W = grid.shape
+    new_grid = np.zeros((H, W), dtype=np.int8)
+
+    if len(rows_to_clear) > 0:
+        for y in range(H):
+            row = grid[y]
+            if y in rows_to_clear:
+                continue
+
+            if sum(row) == 0:
+                continue
+
+            drop_height = 0
+            for row_idx in rows_to_clear:
+                if y < row_idx:
+                    drop_height += 1
+
+            new_grid[y + drop_height] = row.copy()
+
+    return new_grid
+
+
 class TetrisGame:
-    def __init__(self, w: int = GridWidth, h: int = GridHeight, render_delay: float = 0):
+    def __init__(
+        self, w: int = GridWidth, h: int = GridHeight, render_delay: float = 0
+    ):
         # layout
         self.W: int = w
         self.H: int = h
@@ -71,27 +147,10 @@ class TetrisGame:
         return self._get_observation()
 
     def is_valid_position(self, piece: Array, pos: Array) -> bool:
-        h, w = piece.shape
-        x, y = pos
-
-        # check out of bound
-        if x < 0 or x + w > self.W or y + h > self.H + BufferHeight:
-            return False
-
-        for y_ in range(h):
-            for x_ in range(w):
-                if y + y_ - BufferHeight < 0:
-                    continue
-
-                if piece[y_, x_] == 0:
-                    continue
-
-                if self.grid[y + y_ - BufferHeight, x + x_] != 0:
-                    return False
-        return True
+        return is_valid_position(piece, pos, self.grid)
 
     def step(self, a: Action) -> Tuple[Array, float, bool, Dict[str, Any]]:
-        reward = 0.
+        reward = 0.0
         done = False
 
         if self.piece is None:
@@ -117,7 +176,9 @@ class TetrisGame:
         else:
             # check lock
             tmp_pos[1] += 1
-            if action == Action.DOWN and (not self.is_valid_position(self.piece, tmp_pos)):
+            if action == Action.DOWN and (
+                not self.is_valid_position(self.piece, tmp_pos)
+            ):
                 self._lock_piece()
 
                 # clear lines
@@ -131,17 +192,16 @@ class TetrisGame:
                 if not done:
                     self._spawn_piece()
                 else:
-                    reward = -1.
+                    reward = -1.0
 
         self.step_count += 1
         info = {
-            'grid': self.grid.copy(),
-            'piece': self.piece.copy(),
-            'piece_pos': self.piece_pos.copy(),
-            'piece_shape': self.piece_shape,
-            'score': self.score,
-            'step': self.step_count,
-
+            "grid": self.grid.copy(),
+            "piece": self.piece.copy(),
+            "piece_pos": self.piece_pos.copy(),
+            "piece_shape": self.piece_shape,
+            "score": self.score,
+            "step": self.step_count,
         }
 
         if self.render_game:
@@ -151,49 +211,17 @@ class TetrisGame:
         return obs, reward, done, info
 
     def _lock_piece(self):
-        h, w = self.piece.shape
-        x, y = self.piece_pos
-
-        for y_ in range(h):
-            for x_ in range(w):
-                if y + y_ - BufferHeight < 0:
-                    continue
-
-                if self.piece[y_, x_] == 0:
-                    continue
-
-                self.grid[y + y_ - BufferHeight, x + x_] = self.piece[y_, x_]
+        lock_piece(self.grid, self.piece, self.piece_pos)
 
     def list_lines_to_clear(self) -> List[int]:
-        rows_to_clear = []
-
-        for y in range(self.H):
-            row_idx = self.H - 1 - y
-            if sum(self.grid[row_idx]) == self.W:
-                rows_to_clear.append(row_idx)
-        return rows_to_clear
+        return list_lines_to_clear(self.grid, self.H, self.W)
 
     def clear_lines(self) -> int:
-        rows_to_clear = self.list_lines_to_clear()
+        rows_to_clear = np.array(self.list_lines_to_clear(), dtype=np.int8)
 
+        new_grid = clear_lines(self.grid, rows_to_clear)
         if len(rows_to_clear) > 0:
-            grid = np.zeros((self.H, self.W), dtype=np.int8)
-
-            for y in range(self.H):
-                row = self.grid[y]
-                if y in rows_to_clear:
-                    continue
-
-                if sum(row) == 0:
-                    continue
-
-                drop_height = 0
-                for row_idx in rows_to_clear:
-                    if y < row_idx:
-                        drop_height += 1
-
-                grid[y + drop_height] = row.copy()
-            self.grid = grid
+            self.grid = new_grid
 
         return len(rows_to_clear)
 
@@ -221,14 +249,9 @@ class TetrisGame:
                     CellSize - CellPadding,
                 )
 
-                pygame.draw.rect(
-                    self.screen,
-                    White,
-                    rect,
-                    int(obs[y, x] == 0)
-                )
+                pygame.draw.rect(self.screen, White, rect, int(obs[y, x] == 0))
 
-         # Draw buffer danger line
+        # Draw buffer danger line
         pygame.draw.line(
             self.screen,
             ScoreColor,
@@ -289,7 +312,7 @@ if __name__ == "__main__":
     import sys
     import time
 
-    env = TetrisGame(render_delay=0.2)
+    env = TetrisGame(render_delay=0.05)
     obs = env.reset()
     done = False
     paused = False  # 用于控制暂停
@@ -339,8 +362,7 @@ if __name__ == "__main__":
             # env.render()
             env.screen.fill(Black)
             pause_surface = env.font.render("Paused", True, (255, 0, 0))
-            env.screen.blit(
-                pause_surface, (env.ui_w // 2 - 50, env.ui_h // 2))
+            env.screen.blit(pause_surface, (env.ui_w // 2 - 50, env.ui_h // 2))
             pygame.display.flip()
         else:
             # 游戏结束，显示 Game Over
@@ -349,12 +371,10 @@ if __name__ == "__main__":
             restart_surface = env.font.render(
                 "Press R to Restart", True, (255, 255, 255)
             )
-            env.screen.blit(
-                game_over_surface, (env.ui_w // 2 - 70, env.ui_h // 2 - 30)
-            )
-            env.screen.blit(
-                restart_surface, (env.ui_w // 2 - 100, env.ui_h // 2 + 10)
-            )
+            env.screen.blit(game_over_surface,
+                            (env.ui_w // 2 - 70, env.ui_h // 2 - 30))
+            env.screen.blit(restart_surface, (env.ui_w //
+                            2 - 100, env.ui_h // 2 + 10))
             pygame.display.flip()
 
     env.close()
