@@ -150,20 +150,18 @@ class TetrisGame:
         return is_valid_position(piece, pos, self.grid)
 
     def step(self, a: Action) -> Tuple[Array, float, bool, Dict[str, Any]]:
-        reward = 0.0
-        done = False
-
         if self.piece is None:
             self._spawn_piece()
+
+        self.apply_gravity()
 
         tmp_piece = self.piece.copy()
         tmp_pos = self.piece_pos.copy()
         if a == Action.LEFT:
             tmp_pos[0] -= 1
-
         elif a == Action.RIGHT:
             tmp_pos[0] += 1
-        elif a == Action.DOWN or a == Action.NoOps:
+        elif a == Action.DOWN:
             tmp_pos[1] += 1
 
         if a == Action.ROTATE:
@@ -173,26 +171,8 @@ class TetrisGame:
         if self.is_valid_position(tmp_piece, tmp_pos):
             self.piece = tmp_piece.copy()
             self.piece_pos = tmp_pos.copy()
-        else:
-            # check lock
-            tmp_pos[1] += 1
-            if action == Action.DOWN and (
-                not self.is_valid_position(self.piece, tmp_pos)
-            ):
-                self._lock_piece()
 
-                # clear lines
-                num_lines = self.clear_lines()
-                reward += num_lines
-                self.score += int(reward * 100)
-
-                done = self.check_done()
-
-                # spawn new piece
-                if not done:
-                    self._spawn_piece()
-                else:
-                    reward = -1.0
+        reward, done = self.process_lock()
 
         self.step_count += 1
         info = {
@@ -210,6 +190,13 @@ class TetrisGame:
         obs = self._get_observation()
         return obs, reward, done, info
 
+    def apply_gravity(self):
+        # check lock
+        tmp_pos = self.piece_pos.copy()
+        tmp_pos[1] += 1
+        if self.is_valid_position(self.piece, tmp_pos):
+            self.piece_pos = tmp_pos.copy()
+
     def _lock_piece(self):
         lock_piece(self.grid, self.piece, self.piece_pos)
 
@@ -224,6 +211,23 @@ class TetrisGame:
             self.grid = new_grid
 
         return len(rows_to_clear)
+
+    def process_lock(self):
+        reward = 0.0
+        done = False
+
+        next_pos = self.piece_pos.copy() + np.array([0, 1], dtype=np.int8)
+        if not self.is_valid_position(self.piece, next_pos):
+            self._lock_piece()
+            num_lines = self.clear_lines()
+            reward += num_lines
+            self.score += int(reward * 100)
+            done = self.check_done()
+            if not done:
+                self._spawn_piece()
+            else:
+                reward = -1.0
+        return reward, done
 
     def check_done(self) -> bool:
         max_height = self.piece_pos[1] + self.piece.shape[0]
