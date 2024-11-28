@@ -311,6 +311,12 @@ class TetrisGame:
         x = self.W // 2 - piece.shape[1] // 2
         self.piece_pos = np.array([x, 0], dtype=np.int8)
 
+    def get_observation_space(self):
+        return (BufferHeight + self.H, self.W)
+
+    def get_actions(self):
+        return [Action.LEFT, Action.RIGHT, Action.DOWN, Action.ROTATE, Action.NoOps]
+
 
 if __name__ == "__main__":
     import sys
